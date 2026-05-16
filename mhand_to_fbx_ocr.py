@@ -120,7 +120,8 @@ def find_or_launch_mhand(force_restart=True):
 
 def find_export_button_opencv(win, plus_position, debug_dir):
     """
-    Use OpenCV to find the export button by detecting buttons in the bottom toolbar.
+    Use OpenCV to find the export button in the BOTTOM RIGHT corner of the viewport.
+    The export icon is located in the lower right area of the 3D viewport, not in the left panel.
     Returns (x, y) position of export button, or None if not found.
     """
     if not OPENCV_AVAILABLE:
@@ -132,8 +133,18 @@ def find_export_button_opencv(win, plus_position, debug_dir):
         wl, wt = win.left, win.top
         ww, wh = win.width, win.height
         
-        # Capture the bottom toolbar area
-        toolbar_region = (wl, wt + int(wh * 0.88), int(ww * 0.25), int(wh * 0.12))
+        # Capture the BOTTOM RIGHT corner of the window (where export icon is)
+        # Search area: rightmost 15% of width, bottom 15% of height
+        region_width = int(ww * 0.15)
+        region_height = int(wh * 0.15)
+        toolbar_region = (
+            wl + ww - region_width,  # Start from right edge
+            wt + wh - region_height,  # Start from bottom edge
+            region_width,
+            region_height
+        )
+        
+        log.info(f"  Searching for export icon in bottom-right: x={toolbar_region[0]}, y={toolbar_region[1]}, w={region_width}, h={region_height}")
         screenshot = ag.screenshot(region=toolbar_region)
         
         # Convert PIL image to OpenCV format
@@ -141,34 +152,33 @@ def find_export_button_opencv(win, plus_position, debug_dir):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
         # Save debug image
-        cv2.imwrite(str(debug_dir / "05_toolbar_opencv.png"), img)
+        cv2.imwrite(str(debug_dir / "05_bottom_right_opencv.png"), img)
         
         # Detect edges to find button outlines
         edges = cv2.Canny(gray, 50, 150)
-        cv2.imwrite(str(debug_dir / "05_toolbar_edges.png"), edges)
+        cv2.imwrite(str(debug_dir / "05_bottom_right_edges.png"), edges)
         
-        # Find contours (potential buttons)
+        # Find contours (potential buttons/icons)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter contours by size (buttons are typically 20-50 pixels)
+        # Filter contours by size (icons are typically 20-50 pixels)
         button_candidates = []
         for cnt in contours:
             x, y, w, h = cv2.boundingRect(cnt)
             area = cv2.contourArea(cnt)
-            # Filter: reasonable size and roughly square/rectangular
-            if 200 < area < 2000 and 0.5 < w/h < 2.0:
+            # Filter: reasonable size for an icon
+            if 200 < area < 3000 and 0.5 < w/h < 2.0:
                 button_candidates.append((x, y, w, h))
         
         if not button_candidates:
-            log.warning("  No button candidates found by OpenCV")
+            log.warning("  No icon candidates found in bottom-right by OpenCV")
             return None
         
-        # Sort by X position (left to right)
+        # Sort by X position (left to right), take the rightmost one
         button_candidates.sort(key=lambda b: b[0])
         
-        # If we have plus_position, find the rightmost button (export is on the right)
         if button_candidates:
-            # Take the rightmost button as export button
+            # Take the rightmost icon as export button
             rightmost = button_candidates[-1]
             x, y, w, h = rightmost
             
@@ -176,7 +186,7 @@ def find_export_button_opencv(win, plus_position, debug_dir):
             export_x = toolbar_region[0] + x + w // 2
             export_y = toolbar_region[1] + y + h // 2
             
-            log.info(f"  ✓ OpenCV found {len(button_candidates)} buttons, using rightmost at ({export_x}, {export_y})")
+            log.info(f"  ✓ OpenCV found {len(button_candidates)} icons in bottom-right, using rightmost at ({export_x}, {export_y})")
             
             # Draw rectangles on debug image
             for bx, by, bw, bh in button_candidates:
@@ -264,43 +274,54 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
     # ── Export Type / Format (Use OCR to find FBX option) ──────────────────────────────
     log.info("Selecting FBX format using OCR...")
     
-    # Try to find and click "Export Type" or "导出类型" field
-    format_labels = ["Export Type", "Export Format", "导出类型", "Format", "Type"]
-    format_found = False
+    # Move to next field (Export As / Format)
+    ag.press("tab")
+    time.sleep(0.5)
+    ag.screenshot(str(debug_dir / "04_format_field_focused.png"))
     
-    for label in format_labels:
-        result = find_text_on_screen(label, region=window_region, confidence_threshold=0.5,
-                                     debug_save=debug_dir / f"04_search_{label}.png")
+    # Try to find and click "Export As" / "Biovision BVH" dropdown
+    # Look for the current value in the dropdown or the label
+    format_searches = [
+        "Export As", "Export Type", "Format", "Type",  # English labels
+        "导出类型", "格式",  # Chinese labels
+        "Biovision BVH", "BVH"  # Current selected value
+    ]
+    
+    dropdown_clicked = False
+    for search_text in format_searches:
+        result = find_text_on_screen(search_text, region=window_region, 
+                                    confidence_threshold=0.6,
+                                    debug_save=debug_dir / f"04_search_{search_text}.png")
         if result:
-            log.info(f"  Found format field by label: '{label}'")
+            log.info(f"  Found format dropdown by text: '{search_text}'")
             x, y, w, h = result
-            # Click on the dropdown (to the right of label)
-            click_x = x + w + 50
+            # Click on or near the text (to open dropdown)
+            click_x = x + w + 100  # Click to the right (on dropdown arrow)
             click_y = y + h // 2
+            log.info(f"  Clicking dropdown at ({click_x}, {click_y})")
             ag.click(click_x, click_y)
-            time.sleep(0.5)
-            format_found = True
+            time.sleep(0.8)
+            ag.screenshot(str(debug_dir / "05_dropdown_clicked.png"))
+            dropdown_clicked = True
             break
     
-    if not format_found:
-        log.warning("  Could not find format field by OCR, using Tab navigation")
-        ag.press("tab")
-        time.sleep(0.3)
+    # If OCR didn't find it, try opening with keyboard
+    if not dropdown_clicked:
+        log.warning("  Could not find dropdown by OCR, using keyboard")
+        ag.hotkey("alt", "down")
+        time.sleep(0.8)
+        ag.screenshot(str(debug_dir / "05_dropdown_opened_keyboard.png"))
     
-    # Open dropdown with keyboard
-    log.info("  Opening format dropdown...")
-    ag.hotkey("alt", "down")
-    time.sleep(0.8)
-    ag.screenshot(str(debug_dir / "05_dropdown_opened.png"))
-    
-    # Try to find "FBX binary" option using OCR
-    fbx_options = ["FBX binary", "FBX Binary", "binary"]
+    # Now search for "FBX binary" in the opened dropdown
+    fbx_options = ["FBX binary", "FBX Binary", "binary", "FBX"]
     fbx_found = False
     
     log.info("  Searching for 'FBX binary' option in dropdown...")
+    time.sleep(0.5)  # Wait for dropdown to fully render
+    
     for option_text in fbx_options:
         result = find_text_on_screen(option_text, region=window_region, 
-                                     confidence_threshold=0.5,
+                                     confidence_threshold=0.6,
                                      debug_save=debug_dir / f"06_search_{option_text}.png")
         if result:
             log.info(f"  ✓ Found FBX option by OCR: '{option_text}'")
@@ -308,6 +329,7 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
             # Click on the option
             click_x = x + w // 2
             click_y = y + h // 2
+            log.info(f"  Clicking FBX option at ({click_x}, {click_y})")
             ag.click(click_x, click_y)
             time.sleep(0.5)
             fbx_found = True
@@ -316,18 +338,28 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
     if not fbx_found:
         log.warning("  Could not find 'FBX binary' by OCR, using keyboard navigation")
         # Fallback: keyboard navigation
-        # HOME to go to top, then DOWN to navigate
-        ag.press("home")
-        time.sleep(0.5)
+        # Press DOWN multiple times to find FBX binary
+        log.info("  Navigating dropdown with arrow keys...")
         
-        # Navigate to FBX binary (usually position 4)
-        for i in range(3):
+        # Try pressing down 5-10 times to find FBX binary
+        for i in range(10):
             ag.press("down")
-            time.sleep(0.5)
+            time.sleep(0.3)
+            
+            # Check if we see "FBX" or "binary" on screen now
+            if i % 2 == 0:  # Check every other iteration
+                fbx_check = find_text_on_screen("FBX", region=window_region, confidence_threshold=0.6)
+                if fbx_check:
+                    log.info(f"  Found 'FBX' after {i+1} downs")
+                    ag.press("enter")
+                    time.sleep(0.5)
+                    fbx_found = True
+                    break
         
-        # Confirm
-        ag.press("enter")
-        time.sleep(0.5)
+        if not fbx_found:
+            log.warning("  Still couldn't find FBX, pressing Enter on current selection")
+            ag.press("enter")
+            time.sleep(0.5)
     
     ag.screenshot(str(debug_dir / "07_format_selected.png"))
     
@@ -560,39 +592,58 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
     time.sleep(0.5)
     ag.screenshot(str(debug_dir / "04b_cursor_moved_right.png"))
 
-    # ── Step 5: Find export icon on the EXTREME RIGHT using OpenCV ─────────────
-    log.info("Step 5: Searching for export icon on the EXTREME RIGHT using OpenCV...")
+    # ── Step 5: Find export icon (5% above the + button, far right) ───────────
+    log.info("Step 5: Searching for export icon (5% above + button) using OpenCV...")
     
     export_pos = None
     export_success = False
     
-    # Focus search on the EXTREME RIGHT of the left panel toolbar
-    # The export button is at the far right edge
-    panel_width = int(ww * 0.25)  # Left panel is ~25% of window
-    right_region = (
-        wl + int(panel_width * 0.7),  # Start at 70% of panel width (rightmost area)
-        wt + int(wh * 0.88),           # Bottom toolbar area
-        int(panel_width * 0.3),        # Search the rightmost 30% of panel
-        int(wh * 0.12)                 # Height of toolbar
-    )
+    # The export icon is at the FAR RIGHT, approximately 5% ABOVE the + button
+    # Use the + button position as reference
+    if plus_position:
+        plus_x, plus_y = plus_position
+        # Calculate search region: 5% above the + button, far right side
+        search_y_offset = int(wh * 0.05)  # 5% of window height
+        region_width = int(ww * 0.15)     # Rightmost 15%
+        region_height = int(wh * 0.15)    # 15% height around the target
+        
+        lower_right_region = (
+            wl + ww - region_width,           # Start from right edge
+            plus_y - search_y_offset - region_height // 2,  # Center around 5% above +
+            region_width,
+            region_height
+        )
+        
+        log.info(f"  + button at Y={plus_y}, searching 5% above (Y≈{plus_y - search_y_offset})")
+        log.info(f"  Search region: x={lower_right_region[0]}, y={lower_right_region[1]}, w={region_width}, h={region_height}")
+    else:
+        # Fallback if + position not available
+        region_width = int(ww * 0.15)
+        region_height = int(wh * 0.30)
+        lower_right_region = (
+            wl + ww - region_width,
+            wt + wh - region_height - int(wh * 0.10),
+            region_width,
+            region_height
+        )
+        log.warning("  + button position not available, using estimated region")
+        log.info(f"  Search region: x={lower_right_region[0]}, y={lower_right_region[1]}, w={region_width}, h={region_height}")
     
-    log.info(f"  Searching in extreme right region: x={right_region[0]}, y={right_region[1]}, w={right_region[2]}, h={right_region[3]}")
-    
-    # Try OpenCV detection in the extreme right region
+    # Try OpenCV detection above the playback controls
     if OPENCV_AVAILABLE:
         try:
             import cv2
             
-            # Capture the right side of toolbar
-            screenshot = ag.screenshot(region=right_region)
+            # Capture the lower-right area (above playback controls)
+            screenshot = ag.screenshot(region=lower_right_region)
             img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
-            cv2.imwrite(str(debug_dir / "05_right_toolbar_opencv.png"), img)
+            cv2.imwrite(str(debug_dir / "05_lower_right_opencv.png"), img)
             
             # Detect edges
             edges = cv2.Canny(gray, 50, 150)
-            cv2.imwrite(str(debug_dir / "05_right_toolbar_edges.png"), edges)
+            cv2.imwrite(str(debug_dir / "05_lower_right_edges.png"), edges)
             
             # Find contours (potential buttons/icons)
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -602,71 +653,89 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
             for cnt in contours:
                 x, y, w, h = cv2.boundingRect(cnt)
                 area = cv2.contourArea(cnt)
-                # Icons are typically 15-40 pixels, roughly square
-                if 150 < area < 1600 and 0.6 < w/h < 1.5:
+                # Icons are typically 200-3000 pixels area, roughly square/rectangular
+                if 200 < area < 3000 and 0.5 < w/h < 2.0:
                     icon_candidates.append((x, y, w, h, area))
             
             if icon_candidates:
-                # Sort by area (largest icon is likely the export button)
-                icon_candidates.sort(key=lambda ic: ic[4], reverse=True)
+                # Sort by X position (rightmost first - export is at far right)
+                icon_candidates.sort(key=lambda ic: ic[0], reverse=True)
                 
-                # Take the largest icon as export button
-                x, y, w, h, area = icon_candidates[0]
-                
-                # Convert back to screen coordinates
-                export_x = right_region[0] + x + w // 2
-                export_y = right_region[1] + y + h // 2
-                
-                log.info(f"  ✓ OpenCV found {len(icon_candidates)} icons on right, using largest at ({export_x}, {export_y})")
-                export_pos = (export_x, export_y)
+                log.info(f"  ✓ OpenCV found {len(icon_candidates)} icons in search region")
                 
                 # Draw rectangles on debug image
                 for ix, iy, iw, ih, _ in icon_candidates:
                     cv2.rectangle(img, (ix, iy), (ix + iw, iy + ih), (0, 255, 0), 2)
-                cv2.rectangle(img, (x, y), (x + w, y + h), (0, 0, 255), 3)  # Highlight selected
-                cv2.imwrite(str(debug_dir / "05_right_icons_detected.png"), img)
+                cv2.imwrite(str(debug_dir / "05_lower_right_icons_detected.png"), img)
+                
+                # Try each icon until we find one that opens the DataExport dialog
+                for idx, (x, y, w, h, area) in enumerate(icon_candidates):
+                    # Convert back to screen coordinates
+                    test_x = lower_right_region[0] + x + w // 2
+                    test_y = lower_right_region[1] + y + h // 2
+                    
+                    log.info(f"  Trying icon {idx + 1}/{len(icon_candidates)} at ({test_x}, {test_y})...")
+                    ag.click(test_x, test_y)
+                    time.sleep(1.5)  # Wait for dialog to appear
+                    
+                    # Take screenshot and check for "DataExport" text
+                    ag.screenshot(str(debug_dir / f"05_icon_{idx + 1}_clicked.png"))
+                    
+                    # Check if DataExport dialog appeared
+                    window_region = (wl, wt, ww, wh)
+                    dataexport_found = find_text_on_screen("DataExport", region=window_region, 
+                                                          confidence_threshold=0.7)
+                    
+                    if dataexport_found:
+                        log.info(f"  ✓ Found DataExport dialog after clicking icon {idx + 1}!")
+                        export_pos = (test_x, test_y)
+                        export_success = True
+                        break
+                    else:
+                        log.info(f"  DataExport not found, trying next icon...")
+                        # Press Escape to close any dialog that might have opened
+                        ag.press("escape")
+                        time.sleep(0.5)
+                
+                if not export_success:
+                    log.warning("  None of the detected icons opened DataExport dialog")
             else:
-                log.warning("  No icon candidates found on right side by OpenCV")
+                log.warning("  No icon candidates found in lower-right area by OpenCV")
         except Exception as e:
             log.warning(f"  OpenCV detection failed: {e}")
     
-    # Try template matching if OpenCV detection didn't work
-    if not export_pos:
-        export_icon_path = Path(__file__).parent / "icons" / "export_icon.png"
+    # If OpenCV didn't work, try fallback position
+    if not export_success:
+        log.info("  Trying fallback position...")
+        # Fallback: calculate position based on + button (5% above, far right)
+        if plus_position:
+            plus_x, plus_y = plus_position
+            search_y_offset = int(wh * 0.05)  # 5% of window height above +
+            export_btn_x = wl + ww - 35       # 35 pixels from right edge
+            export_btn_y = plus_y - search_y_offset
+            log.info(f"  Using fallback (5% above + button): ({export_btn_x}, {export_btn_y})")
+            log.info(f"  + button was at Y={plus_y}, export at Y={export_btn_y}")
+        else:
+            # Absolute fallback if + position not available
+            export_btn_x = wl + ww - 35
+            export_btn_y = wt + wh - int(wh * 0.15)
+            log.info(f"  Using absolute fallback: ({export_btn_x}, {export_btn_y})")
         
-        if export_icon_path.exists():
-            try:
-                log.info(f"  Trying template matching with: {export_icon_path}")
-                # Search only in the right region
-                icon_location = ag.locateOnScreen(str(export_icon_path), region=right_region, confidence=0.7)
-                
-                if icon_location:
-                    export_pos = ag.center(icon_location)
-                    log.info(f"  ✓ Template matching found export icon at {export_pos}")
-            except Exception as e:
-                log.warning(f"  Template matching failed: {e}")
-    
-    # Use the found position or fallback
-    if export_pos:
-        export_btn_x, export_btn_y = export_pos
-        log.info(f"  Clicking export button at ({export_btn_x}, {export_btn_y})")
-        ag.click(export_btn_x, export_btn_y)
-        time.sleep(CFG["ui_delay"] * 2)
-        ag.screenshot(str(debug_dir / "05_export_clicked_opencv.png"))
-        export_success = True
-    else:
-        # Fallback: use absolute position at the FAR RIGHT of left panel
-        panel_width = int(ww * 0.25)
-        # Export button is at the extreme right, near the edge
-        export_btn_x = wl + panel_width - 40  # 40 pixels from right edge
-        export_btn_y = wt + wh - int(wh * 0.052)  # Same Y as other buttons
-        log.info(f"  Using fallback (extreme right of panel): ({export_btn_x}, {export_btn_y})")
-        log.info(f"  Panel extends from {wl} to {wl + panel_width}, clicking at {export_btn_x}")
+        log.info(f"  Window: from ({wl}, {wt}) to ({wl + ww}, {wt + wh})")
         
         ag.click(export_btn_x, export_btn_y)
-        time.sleep(CFG["ui_delay"] * 2)
+        time.sleep(1.5)
         ag.screenshot(str(debug_dir / "05_export_clicked_fallback.png"))
-        export_success = True  # Assume fallback worked
+        
+        # Check if DataExport appeared
+        window_region = (wl, wt, ww, wh)
+        dataexport_found = find_text_on_screen("DataExport", region=window_region, 
+                                              confidence_threshold=0.7)
+        if dataexport_found:
+            log.info("  ✓ Fallback position opened DataExport dialog!")
+            export_success = True
+        else:
+            log.warning("  Fallback position did not open DataExport dialog")
     
     if not export_success:
         log.error("✗ Step 5 FAILED: Could not click export button")
