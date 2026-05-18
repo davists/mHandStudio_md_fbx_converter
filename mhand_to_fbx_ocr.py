@@ -16,11 +16,9 @@ import numpy as np
 # Import OCR helper
 from ocr_ui_helper import (
     click_button_by_text,
-    smart_dropdown_select,
-    find_and_click_text,
-    verify_text_exists,
     check_tesseract_installation,
-    find_text_on_screen
+    find_text_on_screen,
+    handle_auto_update_dialog
 )
 
 # Try to import OpenCV for advanced image detection
@@ -112,6 +110,19 @@ def find_or_launch_mhand(force_restart=True):
                 pass
             log.info("Aguardando mHandStudio carregar completamente...")
             time.sleep(5)
+            
+            # Verificar e tratar diálogo de Auto Update logo no início
+            log.info("Verificando se há diálogo de Auto Update...")
+            wl, wt, ww, wh = wins[0].left, wins[0].top, wins[0].width, wins[0].height
+            window_region = (wl, wt, ww, wh)
+            
+            # Criar diretório de debug temporário
+            temp_debug = Path.cwd() / "_startup_debug"
+            temp_debug.mkdir(exist_ok=True)
+            
+            # Tentar tratar o diálogo de update
+            handle_auto_update_dialog(window_region=window_region, debug_dir=temp_debug)
+            
             return wins[0]
 
     log.error("Timeout: mHand Studio não abriu em %ds.", CFG["startup_timeout"])
@@ -240,8 +251,8 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
     # ── File Name (Use OCR to locate the field) ──────────────────────────────────────────
     log.info("Setting filename: %s", fbx_path.stem)
     
-    # Try to find "File Name" or "文件名" label
-    filename_labels = ["File Name", "Filename", "文件名", "Name"]
+    # Try to find "File Name" label
+    filename_labels = ["File Name", "Filename", "Name"]
     filename_found = False
     
     for label in filename_labels:
@@ -272,102 +283,132 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
     ag.screenshot(str(debug_dir / "03_filename_entered.png"))
     
     # ── Export Type / Format (Use OCR to find FBX option) ──────────────────────────────
-    log.info("Selecting FBX format using OCR...")
+    log.info("Selecting FBX binary format...")
     
     # Move to next field (Export As / Format)
     ag.press("tab")
     time.sleep(0.5)
     ag.screenshot(str(debug_dir / "04_format_field_focused.png"))
     
-    # Try to find and click "Export As" / "Biovision BVH" dropdown
-    # Look for the current value in the dropdown or the label
-    format_searches = [
-        "Export As", "Export Type", "Format", "Type",  # English labels
-        "导出类型", "格式",  # Chinese labels
-        "Biovision BVH", "BVH"  # Current selected value
-    ]
+    # CRITICAL: We need to select "FBX binary" instead of default "Biovision BVH"
+    log.info("  Opening Export As dropdown...")
     
-    dropdown_clicked = False
-    for search_text in format_searches:
-        result = find_text_on_screen(search_text, region=window_region, 
-                                    confidence_threshold=0.6,
-                                    debug_save=debug_dir / f"04_search_{search_text}.png")
-        if result:
-            log.info(f"  Found format dropdown by text: '{search_text}'")
-            x, y, w, h = result
-            # Click on or near the text (to open dropdown)
-            click_x = x + w + 100  # Click to the right (on dropdown arrow)
+    # Method 1: Try to find "Biovision BVH" (the default selected value) and click it
+    bvh_found = find_text_on_screen("Biovision BVH", region=window_region, 
+                                    confidence_threshold=0.5,
+                                    debug_save=debug_dir / "04a_search_bvh.png")
+    
+    dropdown_opened = False
+    if bvh_found:
+        x, y, w, h = bvh_found
+        # Click on the dropdown (on the text or slightly to the right)
+        click_x = x + w // 2
+        click_y = y + h // 2
+        log.info(f"  Found 'Biovision BVH', clicking at ({click_x}, {click_y}) to open dropdown")
+        ag.click(click_x, click_y)
+        time.sleep(0.8)
+        dropdown_opened = True
+    else:
+        # Method 2: Try clicking on "Export As" label area
+        log.info("  BVH not found, trying 'Export As' label...")
+        export_as_found = find_text_on_screen("Export As", region=window_region, 
+                                             confidence_threshold=0.5,
+                                             debug_save=debug_dir / "04a_search_export_as.png")
+        if export_as_found:
+            x, y, w, h = export_as_found
+            # Click to the right of the label (where the dropdown should be)
+            click_x = x + w + 150
             click_y = y + h // 2
-            log.info(f"  Clicking dropdown at ({click_x}, {click_y})")
+            log.info(f"  Found 'Export As', clicking dropdown at ({click_x}, {click_y})")
             ag.click(click_x, click_y)
             time.sleep(0.8)
-            ag.screenshot(str(debug_dir / "05_dropdown_clicked.png"))
-            dropdown_clicked = True
-            break
+            dropdown_opened = True
     
-    # If OCR didn't find it, try opening with keyboard
-    if not dropdown_clicked:
-        log.warning("  Could not find dropdown by OCR, using keyboard")
+    # Method 3: Fallback - use keyboard shortcut
+    if not dropdown_opened:
+        log.info("  Using keyboard shortcut to open dropdown: Alt+Down")
         ag.hotkey("alt", "down")
         time.sleep(0.8)
-        ag.screenshot(str(debug_dir / "05_dropdown_opened_keyboard.png"))
+        dropdown_opened = True
     
-    # Now search for "FBX binary" in the opened dropdown
-    fbx_options = ["FBX binary", "FBX Binary", "binary", "FBX"]
-    fbx_found = False
+    ag.screenshot(str(debug_dir / "04b_dropdown_opened.png"))
     
+    # Now search for "FBX binary" option in the opened dropdown
     log.info("  Searching for 'FBX binary' option in dropdown...")
-    time.sleep(0.5)  # Wait for dropdown to fully render
+    time.sleep(0.5)  # Wait for dropdown animation
+    
+    # Try multiple search terms
+    fbx_options = ["FBX binary", "FBX Binary", "FBX(*.fbx)"]
+    fbx_found = False
     
     for option_text in fbx_options:
         result = find_text_on_screen(option_text, region=window_region, 
-                                     confidence_threshold=0.6,
-                                     debug_save=debug_dir / f"06_search_{option_text}.png")
+                                     confidence_threshold=0.5,
+                                     debug_save=debug_dir / f"05_search_{option_text.replace(' ', '_').replace('*', 'x')}.png")
         if result:
-            log.info(f"  ✓ Found FBX option by OCR: '{option_text}'")
             x, y, w, h = result
-            # Click on the option
             click_x = x + w // 2
             click_y = y + h // 2
-            log.info(f"  Clicking FBX option at ({click_x}, {click_y})")
+            log.info(f"  ✓ Found '{option_text}' at ({click_x}, {click_y})")
             ag.click(click_x, click_y)
             time.sleep(0.5)
             fbx_found = True
             break
+        time.sleep(0.2)
     
+    # Fallback: Navigate with arrow keys
     if not fbx_found:
-        log.warning("  Could not find 'FBX binary' by OCR, using keyboard navigation")
-        # Fallback: keyboard navigation
-        # Press DOWN multiple times to find FBX binary
-        log.info("  Navigating dropdown with arrow keys...")
+        log.warning("  FBX binary not found by OCR, using keyboard navigation...")
+        log.info("  Pressing DOWN arrow keys to find FBX binary...")
         
-        # Try pressing down 5-10 times to find FBX binary
-        for i in range(10):
+        # First, go to top of list
+        ag.press("home")
+        time.sleep(0.3)
+        
+        # FBX binary is typically near the top of the list
+        # Try up to 15 down presses
+        for i in range(15):
+            ag.screenshot(str(debug_dir / f"05_dropdown_item_{i}.png"))
+            
+            # Check if "FBX" appears in current selection
+            fbx_check = find_text_on_screen("FBX", region=window_region, confidence_threshold=0.5)
+            binary_check = find_text_on_screen("binary", region=window_region, confidence_threshold=0.5)
+            
+            if fbx_check or binary_check:
+                log.info(f"  ✓ Found FBX after {i} down presses")
+                ag.press("enter")
+                time.sleep(0.5)
+                fbx_found = True
+                break
+            
             ag.press("down")
             time.sleep(0.3)
-            
-            # Check if we see "FBX" or "binary" on screen now
-            if i % 2 == 0:  # Check every other iteration
-                fbx_check = find_text_on_screen("FBX", region=window_region, confidence_threshold=0.6)
-                if fbx_check:
-                    log.info(f"  Found 'FBX' after {i+1} downs")
-                    ag.press("enter")
-                    time.sleep(0.5)
-                    fbx_found = True
-                    break
         
+        # Last resort: just press Enter on whatever is selected
         if not fbx_found:
-            log.warning("  Still couldn't find FBX, pressing Enter on current selection")
+            log.warning("  Could not find FBX binary, pressing Enter on current selection")
             ag.press("enter")
             time.sleep(0.5)
     
-    ag.screenshot(str(debug_dir / "07_format_selected.png"))
+    ag.screenshot(str(debug_dir / "06_format_selected.png"))
+    
+    # Verify FBX was selected
+    log.info("  Verifying FBX binary was selected...")
+    time.sleep(0.3)
+    fbx_verify = find_text_on_screen("FBX", region=window_region, confidence_threshold=0.5)
+    if fbx_verify:
+        log.info("  ✓ FBX binary successfully selected!")
+    else:
+        log.warning("  Could not verify FBX selection, but continuing...")
+    
+    ag.screenshot(str(debug_dir / "07_format_verified.png"))
     
     # ── OK Button (Use OCR to find Confirm button) ────────────────────────────────────────
+    
     log.info("Looking for OK/Confirm button...")
     
     # Try multiple possible button texts
-    ok_texts = ["OK", "确定", "Confirm", "Export", "导出"]
+    ok_texts = ["OK", "Confirm", "Export"]
     ok_clicked = False
     
     for ok_text in ok_texts:
@@ -423,10 +464,58 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
     time.sleep(3)
     ag.screenshot(str(debug_dir / "00_initial.png"))
     
+    # Handle Auto Update dialog if it appears
+    window_region = (wl, wt, ww, wh)
+    handle_auto_update_dialog(window_region=window_region, debug_dir=debug_dir)
+    
+    # ── Pre-Step: Verificar se há diálogo de Update antes de continuar ────────
+    log.info("Pre-Step: Verificando se há diálogo de Update na tela...")
+    
+    # Procurar por "Update" e "Cancel" simultaneamente
+    update_found = find_text_on_screen("Update", region=window_region, 
+                                      confidence_threshold=0.4,
+                                      debug_save=debug_dir / "00a_check_update.png")
+    cancel_found = find_text_on_screen("Cancel", region=window_region, 
+                                      confidence_threshold=0.4,
+                                      debug_save=debug_dir / "00a_check_cancel.png")
+    
+    if update_found and cancel_found:
+        log.info("  ✓ Diálogo de Update detectado (Update + Cancel presentes)")
+        log.info("  Clicando em Cancel para fechar o diálogo...")
+        
+        # Clicar no botão Cancel
+        cx, cy, cw, ch = cancel_found
+        click_x = cx + cw // 2
+        click_y = cy + ch // 2
+        ag.click(click_x, click_y)
+        time.sleep(2)  # Esperar o diálogo fechar
+        ag.screenshot(str(debug_dir / "00a_update_dialog_closed.png"))
+        
+        # Verificar se o menu Edit agora está visível
+        log.info("  Verificando se menu Edit está visível...")
+        menu_bar_region = (wl, wt, ww, int(wh * 0.08))
+        
+        edit_visible = False
+        for edit_label in ["Edit"]:
+            edit_check = find_text_on_screen(edit_label, region=menu_bar_region, 
+                                            confidence_threshold=0.6,
+                                            debug_save=debug_dir / f"00a_check_edit_{edit_label}.png")
+            if edit_check:
+                log.info(f"  ✓ Menu '{edit_label}' está visível após fechar diálogo!")
+                edit_visible = True
+                break
+        
+        if edit_visible:
+            log.info("  Interface pronta para uso. Continuando com o workflow...")
+        else:
+            log.warning("  Menu Edit não encontrado após fechar diálogo, mas continuando...")
+    else:
+        log.info("  Nenhum diálogo de Update detectado. Continuando normalmente...")
+    
     # ── Step 1: Click Edit menu using OCR ─────────────────────────────────────
     log.info("Step 1: Clicking Edit menu using OCR...")
     menu_bar_region = (wl, wt, ww, int(wh * 0.08))
-    edit_labels = ["Edit", "编辑"]
+    edit_labels = ["Edit"]
     edit_clicked = False
     
     for label in edit_labels:

@@ -369,6 +369,164 @@ def verify_text_exists(
     return False
 
 
+def click_checkbox_by_text(
+    checkbox_label: str,
+    search_region=None,
+    offset_x: int = -20,
+    retry_count: int = 2,
+    debug_dir: Optional[Path] = None
+) -> bool:
+    """
+    Finds a checkbox by its label text and clicks it.
+    
+    Checkboxes typically have text to their right, so we click to the left of the text.
+    
+    Args:
+        checkbox_label: Text label next to the checkbox (e.g., "NotShowToday", "Remember me")
+        search_region: Region to search in
+        offset_x: Horizontal offset from text (negative = left of text, where checkbox is)
+        retry_count: Number of attempts
+        debug_dir: Directory for debug screenshots
+        
+    Returns:
+        True if checkbox was found and clicked
+    """
+    for attempt in range(retry_count):
+        debug_save = None
+        if debug_dir:
+            debug_save = debug_dir / f"checkbox_{checkbox_label.replace(' ', '_')}_attempt_{attempt+1}.png"
+        
+        log.info(f"Looking for checkbox '{checkbox_label}' (attempt {attempt+1}/{retry_count})...")
+        
+        result = find_text_on_screen(
+            checkbox_label,
+            region=search_region,
+            confidence_threshold=0.4,  # Reduzido de 0.5 para 0.4 para maior sensibilidade
+            debug_save=debug_save
+        )
+        
+        if result:
+            x, y, w, h = result
+            
+            # Tenta múltiplas posições para clicar no checkbox
+            offsets_to_try = [
+                (offset_x, 0),           # Padrão: à esquerda
+                (-15, 0),                # Mais perto do texto
+                (-25, 0),                # Mais longe do texto
+                (-30, 0),                # Ainda mais longe
+                (offset_x, h // 2),      # À esquerda, centro vertical
+            ]
+            
+            for i, (off_x, off_y) in enumerate(offsets_to_try):
+                click_x = x + off_x
+                click_y = y + h // 2 + off_y
+                
+                log.info(f"  ✓ Found checkbox label at ({x}, {y}), trying click at ({click_x}, {click_y}) [offset {i+1}]")
+                ag.click(click_x, click_y)
+                time.sleep(0.3)
+                
+                # Tenta apenas o primeiro offset no primeiro attempt, depois tenta todos
+                if attempt == 0 and i == 0:
+                    break
+            
+            return True
+        
+        if attempt < retry_count - 1:
+            time.sleep(0.5)
+    
+    log.warning(f"Could not find checkbox '{checkbox_label}'")
+    return False
+
+
+def handle_auto_update_dialog(
+    window_region=None,
+    debug_dir: Optional[Path] = None,
+    timeout: float = 5.0
+) -> bool:
+    """
+    Handles the Auto Update dialog that appears on mHandStudio startup.
+    
+    Detects the dialog by looking for "Update Now" text and clicks Cancel to close it.
+    
+    Args:
+        window_region: Region to search (or None for full screen)
+        debug_dir: Directory to save debug screenshots
+        timeout: How long to wait for dialog to appear
+        
+    Returns:
+        True if dialog was handled, False if dialog not found
+    """
+    log.info("Checking for Auto Update dialog...")
+    
+    # Create debug directory if needed
+    if debug_dir:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        ag.screenshot(str(debug_dir / "00_startup_check_update_dialog.png"))
+    
+    # Check if the dialog exists - look for "Update Now" or related text
+    dialog_indicators = [
+        "Update Now",
+        "Update",
+        "Now",
+        "Auto Update",
+        "NewVersionDetected",
+        "V1.0",
+        "2026"
+    ]
+    
+    dialog_found = False
+    found_keyword = ""
+    for indicator in dialog_indicators:
+        result = find_text_on_screen(
+            indicator,
+            region=window_region,
+            confidence_threshold=0.4,
+            debug_save=debug_dir / f"00_search_{indicator.replace(' ', '_')}.png" if debug_dir else None
+        )
+        if result:
+            log.info(f"  ✓ Auto Update dialog detected (found '{indicator}')")
+            dialog_found = True
+            found_keyword = indicator
+            break
+        time.sleep(0.15)
+    
+    if not dialog_found:
+        log.info("  No Auto Update dialog found, continuing...")
+        return False
+    
+    # Dialog exists, click Cancel to close it
+    log.info(f"Auto Update dialog confirmado (palavra detectada: '{found_keyword}')")
+    log.info("Clicando em Cancel para fechar o diálogo...")
+    
+    # Search for Cancel button
+    cancel_labels = ["Cancel", "Close"]
+    cancel_clicked = False
+    
+    for label in cancel_labels:
+        if click_button_by_text(
+            label,
+            search_region=window_region,
+            retry_count=2,
+            debug_dir=debug_dir
+        ):
+            log.info(f"  ✓ Botão '{label}' clicado com sucesso!")
+            cancel_clicked = True
+            break
+    
+    if not cancel_clicked:
+        log.warning("  Could not find Cancel button, trying ESC key...")
+        ag.press("escape")
+        time.sleep(0.5)
+    
+    if debug_dir:
+        ag.screenshot(str(debug_dir / "01_dialog_closed.png"))
+    
+    log.info("Auto Update dialog handled successfully")
+    time.sleep(1)  # Wait for dialog to close
+    
+    return True
+
+
 def check_tesseract_installation() -> bool:
     """
     Verifies that Tesseract OCR is installed and accessible.
