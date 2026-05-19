@@ -199,25 +199,59 @@ python mhand_to_fbx_ocr.py --input "mao\01-05\Abastar.md" --output "fbx\Abastar.
 
 Use o script PowerShell `md_to_fbx.ps1` para processar múltiplos arquivos:
 
+#### Uso Básico
+
 ```powershell
+# Processar todos os arquivos na pasta padrão (mao)
 .\md_to_fbx.ps1
+
+# Especificar pasta raiz customizada
+.\md_to_fbx.ps1 -RootPath "C:\caminho\para\arquivos"
+
+# Usar versão OCR (mais confiável)
+.\md_to_fbx.ps1 -UseOCR
+
+# Combinar parâmetros
+.\md_to_fbx.ps1 -RootPath "mao\01-05" -UseOCR
+
+# Processar apenas uma subpasta específica
+.\md_to_fbx.ps1 -RootPath "mao\10-04"
 ```
 
-Este script procura todos os arquivos `.md` na pasta `mao\` recursivamente e converte cada um.
+#### Parâmetros
 
-**Editar o script se necessário:**
-```powershell
-# md_to_fbx.ps1
-Get-ChildItem -Path "mao" -Filter "*.md" -Recurse | ForEach-Object {
-    Write-Host "Processing: $($_.Name)" -ForegroundColor Cyan
-    python mhand_to_fbx_ocr.py --input $_.FullName
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "✓ Success: $($_.Name)" -ForegroundColor Green
-    } else {
-        Write-Host "✗ Failed: $($_.Name)" -ForegroundColor Red
-    }
-}
+| Parâmetro | Tipo | Padrão | Descrição |
+|-----------|------|--------|-----------|
+| `-RootPath` | String | `"mao"` | Diretório raiz onde buscar arquivos `.md` recursivamente |
+| `-UseOCR` | Switch | `$false` | Usar `mhand_to_fbx_ocr.py` (OCR) ao invés de `mhand_to_fbx.py` |
+
+#### Saída do Script
+
+O script mostra um relatório completo:
+
+```
+================================================
+  mHand MD to FBX Batch Converter
+================================================
+Root Path: mao
+Script: mhand_to_fbx_ocr.py
+
+Found 15 .md file(s)
+
+Processing: Abastar.md
+  Path: C:\...\mao\01-05\Abastar.md
+  ✓ Success
+
+Processing: Acordar.md
+  Path: C:\...\mao\10-04\Acordar.md
+  ✓ Success
+
+================================================
+  Batch Conversion Complete
+================================================
+Total: 15 | Success: 15 | Failed: 0
+
+All conversions completed successfully! ✓
 ```
 
 ---
