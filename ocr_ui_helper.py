@@ -116,6 +116,9 @@ def find_text_on_screen(
             config='--psm 11'  # Sparse text mode
         )
         
+        # Collect all detected text for debugging
+        detected_texts = []
+        
         # Search through detected text
         n_boxes = len(data['text'])
         for i in range(n_boxes):
@@ -124,6 +127,9 @@ def find_text_on_screen(
             
             if not detected_text or conf < confidence_threshold:
                 continue
+            
+            # Log all detected text for debugging
+            detected_texts.append(f"'{detected_text}'({conf:.0%})")
             
             # Match text
             search_text = text if case_sensitive else text.lower()
@@ -154,6 +160,12 @@ def find_text_on_screen(
                     log.info(f"  Debug image saved to {debug_save}")
                 
                 return (x, y, w, h)
+        
+        # Log all detected text if search failed
+        # if detected_texts:
+            # log.info(f"  OCR detected (invert={invert}): {', '.join(detected_texts[:20])}")  # Show first 20
+            # if len(detected_texts) > 20:
+                # log.info(f"  ... and {len(detected_texts) - 20} more texts")
     
     log.warning(f"✗ Text '{text}' not found on screen")
     
@@ -463,19 +475,25 @@ def handle_auto_update_dialog(
         debug_dir.mkdir(parents=True, exist_ok=True)
         ag.screenshot(str(debug_dir / "00_startup_check_update_dialog.png"))
     
+    # First check if Edit menu is already visible - if so, no dialog is present
+    log.info("  Checking if Edit menu is already visible...")
+    edit_check = find_text_on_screen("Edit", region=window_region, 
+                                     confidence_threshold=0.6,
+                                     debug_save=debug_dir / "00_check_edit_menu.png" if debug_dir else None)
+    if edit_check:
+        log.info("  ✓ Edit menu is already visible, no update dialog present")
+        return False
+    
     # Check if the dialog exists - look for "Update Now" or related text
     dialog_indicators = [
-        "Update Now",
         "Update",
-        "Now",
-        "Auto Update",
         "NewVersionDetected",
-        "V1.0",
-        "2026"
+        "Update Now",
     ]
     
     dialog_found = False
     found_keyword = ""
+    dialog_result = None
     for indicator in dialog_indicators:
         result = find_text_on_screen(
             indicator,
@@ -487,6 +505,7 @@ def handle_auto_update_dialog(
             log.info(f"  ✓ Auto Update dialog detected (found '{indicator}')")
             dialog_found = True
             found_keyword = indicator
+            dialog_result = result
             break
         time.sleep(0.15)
     
@@ -494,32 +513,118 @@ def handle_auto_update_dialog(
         log.info("  No Auto Update dialog found, continuing...")
         return False
     
-    # Dialog exists, click Cancel to close it
+    # Dialog exists, click X button to close it
     log.info(f"Auto Update dialog confirmado (palavra detectada: '{found_keyword}')")
-    log.info("Clicando em Cancel para fechar o diálogo...")
     
-    # Search for Cancel button
-    cancel_labels = ["Cancel", "Close"]
-    cancel_clicked = False
+    # Strategy: Find and click the X close button (top-right of dialog)
+    log.info("Procurando botão X para fechar diálogo...")
     
-    for label in cancel_labels:
-        if click_button_by_text(
-            label,
-            search_region=window_region,
-            retry_count=2,
-            debug_dir=debug_dir
-        ):
-            log.info(f"  ✓ Botão '{label}' clicado com sucesso!")
-            cancel_clicked = True
-            break
+    close_clicked = False
     
-    if not cancel_clicked:
-        log.warning("  Could not find Cancel button, trying ESC key...")
+    # The X button is typically near the top-right of where we found the dialog text
+    if dialog_result:
+        x, y, w, h = dialog_result
+        
+        # Search for X button to the right and slightly above the dialog text
+        # X button is usually in top-right corner of dialog
+        x_search_x = x + w - 100  # Start near right side of detected text
+        x_search_y = y - 50  # Look above the text (title bar area)
+        x_search_w = 200
+        x_search_h = 80
+        
+        x_button_region = (x_search_x, x_search_y, x_search_w, x_search_h)
+        log.info(f"  Searching for X button in region: {x_button_region}")
+        
+        img = capture_screen(region=x_button_region)
+        
+        if debug_dir:
+            cv2.imwrite(str(debug_dir / "02_x_button_region.png"), img)
+        
+        # Look for X button - try OCR first
+        x_labels = ["X", "×", "x"]
+        
+        for label in x_labels:
+            result = find_text_on_screen(
+                label,
+                region=x_button_region,
+                confidence_threshold=0.3,
+                debug_save=debug_dir / f"02_x_search_{label}.png" if debug_dir else None
+            )
+            if result:
+                cx, cy, cw, ch = result
+                click_x = cx + cw // 2
+                click_y = cy + ch // 2
+                log.info(f"  ✓ Found X button at ({click_x}, {click_y}), clicking...")
+                ag.click(click_x, click_y)
+                time.sleep(0.5)
+                close_clicked = True
+                break
+    
+    # Fallback: Try to find small square button in top-right of screen
+    if not close_clicked:
+        log.info("  Trying to detect X button visually...")
+        
+        # Capture top portion of screen where X button would be
+        screen_width, screen_height = ag.size()
+        top_right_region = (int(screen_width * 0.5), 0, int(screen_width * 0.5), int(screen_height * 0.3))
+        
+        img = capture_screen(region=top_right_region)
+        
+        if debug_dir:
+            cv2.imwrite(str(debug_dir / "03_top_right_area.png"), img)
+        
+        # Look for small square-ish buttons (close buttons are typically square)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # X buttons are often light colored (white/light gray on dark background)
+        # or dark on light background
+        light_mask = cv2.inRange(gray, 200, 255)
+        
+        contours, _ = cv2.findContours(light_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        close_candidates = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if 100 < area < 1000:  # Small button-sized
+                bx, by, bw, bh = cv2.boundingRect(contour)
+                aspect_ratio = bw / float(bh) if bh > 0 else 0
+                # Close buttons are squarish (aspect ratio close to 1)
+                if 0.7 < aspect_ratio < 1.3 and 10 < bw < 50 and 10 < bh < 50:
+                    close_candidates.append((bx, by, bw, bh, area))
+        
+        if close_candidates:
+            # Sort by x position (rightmost first) - X is in top-right
+            close_candidates.sort(key=lambda b: b[0], reverse=True)
+            
+            log.info(f"  Found {len(close_candidates)} X button candidates")
+            
+            if debug_dir:
+                debug_img = img.copy()
+                for i, (bx, by, bw, bh, _) in enumerate(close_candidates[:3]):
+                    color = (0, 255, 0) if i == 0 else (0, 0, 255)
+                    cv2.rectangle(debug_img, (bx, by), (bx + bw, by + bh), color, 2)
+                    cv2.putText(debug_img, f"#{i+1}", (bx, by-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                cv2.imwrite(str(debug_dir / "04_x_button_candidates.png"), debug_img)
+            
+            # Click the rightmost candidate
+            bx, by, bw, bh, _ = close_candidates[0]
+            click_x = top_right_region[0] + bx + bw // 2
+            click_y = top_right_region[1] + by + bh // 2
+            
+            log.info(f"  Clicking X button at ({click_x}, {click_y})")
+            ag.click(click_x, click_y)
+            time.sleep(0.5)
+            close_clicked = True
+    
+    # Fallback: ESC key
+    if not close_clicked:
+        log.warning("  Could not find X button, trying ESC key...")
         ag.press("escape")
         time.sleep(0.5)
+        close_clicked = True
     
     if debug_dir:
-        ag.screenshot(str(debug_dir / "01_dialog_closed.png"))
+        ag.screenshot(str(debug_dir / "05_dialog_closed.png"))
     
     log.info("Auto Update dialog handled successfully")
     time.sleep(1)  # Wait for dialog to close
@@ -563,7 +668,7 @@ if __name__ == "__main__":
         log.info(f"  Captured {img.shape[1]}x{img.shape[0]} image")
         
         # Test text finding (will search for common Windows UI text)
-        test_texts = ["Start", "Search", "File", "Edit", "View"]
+        test_texts = ["Edit"]
         for text in test_texts:
             result = find_text_on_screen(text, confidence_threshold=0.5)
             if result:

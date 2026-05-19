@@ -117,11 +117,11 @@ def find_or_launch_mhand(force_restart=True):
             window_region = (wl, wt, ww, wh)
             
             # Criar diretório de debug temporário
-            temp_debug = Path.cwd() / "_startup_debug"
-            temp_debug.mkdir(exist_ok=True)
+            # temp_debug = Path.cwd() / "_startup_debug"
+            # temp_debug.mkdir(exist_ok=True)
             
             # Tentar tratar o diálogo de update
-            handle_auto_update_dialog(window_region=window_region, debug_dir=temp_debug)
+            # handle_auto_update_dialog(window_region=window_region, debug_dir=temp_debug)
             
             return wins[0]
 
@@ -240,9 +240,11 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
     ww, wh = win.width, win.height
     window_region = (wl, wt, ww, wh)
     
-    # Create debug directory
-    debug_dir = fbx_path.parent / "_ocr_debug"
+    # Create debug directory at project root
+    project_root = Path.cwd()
+    debug_dir = project_root / "_ocr_debug"
     debug_dir.mkdir(exist_ok=True)
+    log.info(f"Debug screenshots will be saved to: {debug_dir}")
     
     # Screenshot initial state
     ag.screenshot(str(debug_dir / "01_dialog_initial.png"))
@@ -270,7 +272,7 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
             break
     
     if not filename_found:
-        log.warning("  Could not find filename field by OCR, using keyboard navigation")
+        log.warning("Could not find filename field by OCR, using keyboard navigation")
         # Fallback: use Tab to navigate to filename field
         ag.press("tab")
         time.sleep(0.3)
@@ -290,103 +292,158 @@ def handle_export_dialog_ocr(win, fbx_path: Path):
     time.sleep(0.5)
     ag.screenshot(str(debug_dir / "04_format_field_focused.png"))
     
-    # CRITICAL: We need to select "FBX binary" instead of default "Biovision BVH"
-    log.info("  Opening Export As dropdown...")
+    # CRITICAL: Click on "Biovision" text to open the dropdown
+    log.info("  Procurando texto 'Biovision' para clicar e abrir dropdown...")
     
-    # Method 1: Try to find "Biovision BVH" (the default selected value) and click it
-    bvh_found = find_text_on_screen("Biovision BVH", region=window_region, 
-                                    confidence_threshold=0.5,
-                                    debug_save=debug_dir / "04a_search_bvh.png")
+    # Try multiple search strategies to find the dropdown
+    bvh_search_terms = [
+        "Biovision",       # Most reliable - just the word
+        "BVH",             # Abbreviation
+        "Biovision BVH",   # Full text
+        "bvh"              # Lowercase variant
+    ]
     
+    bvh_found = None
     dropdown_opened = False
-    if bvh_found:
-        x, y, w, h = bvh_found
-        # Click on the dropdown (on the text or slightly to the right)
-        click_x = x + w // 2
-        click_y = y + h // 2
-        log.info(f"  Found 'Biovision BVH', clicking at ({click_x}, {click_y}) to open dropdown")
-        ag.click(click_x, click_y)
-        time.sleep(0.8)
-        dropdown_opened = True
-    else:
-        # Method 2: Try clicking on "Export As" label area
-        log.info("  BVH not found, trying 'Export As' label...")
+    
+    for term in bvh_search_terms:
+        log.info(f"  Buscando '{term}'...")
+        result = find_text_on_screen(term, region=window_region, 
+                                    confidence_threshold=0.4,  # Lower threshold
+                                    case_sensitive=False,      # Ignore case
+                                    debug_save=debug_dir / f"04a_search_{term.replace(' ', '_')}.png")
+        if result:
+            x, y, w, h = result
+            bvh_found = result
+            # Click directly on the text to open dropdown
+            click_x = x + w // 2
+            click_y = y + h // 2
+            log.info(f"  ✓ Encontrado '{term}' em ({x}, {y}), clicando em ({click_x}, {click_y})")
+            ag.click(click_x, click_y)
+            time.sleep(1.0)  # Wait for dropdown to open
+            ag.screenshot(str(debug_dir / "04b_bvh_clicked.png"))
+            dropdown_opened = True
+            break
+        time.sleep(0.2)
+    
+    # Fallback 1: Try clicking on "Export As" label and move right
+    if not dropdown_opened:
+        log.info("  BVH não encontrado, tentando label 'Export As'...")
         export_as_found = find_text_on_screen("Export As", region=window_region, 
-                                             confidence_threshold=0.5,
+                                             confidence_threshold=0.4,
+                                             case_sensitive=False,
                                              debug_save=debug_dir / "04a_search_export_as.png")
         if export_as_found:
             x, y, w, h = export_as_found
             # Click to the right of the label (where the dropdown should be)
-            click_x = x + w + 150
+            click_x = x + w + 100
             click_y = y + h // 2
-            log.info(f"  Found 'Export As', clicking dropdown at ({click_x}, {click_y})")
+            log.info(f"  Encontrado 'Export As', clicando dropdown em ({click_x}, {click_y})")
             ag.click(click_x, click_y)
             time.sleep(0.8)
+            ag.screenshot(str(debug_dir / "04b_export_as_clicked.png"))
             dropdown_opened = True
     
-    # Method 3: Fallback - use keyboard shortcut
+    # Fallback 2: Space bar to open dropdown (if field is focused)
     if not dropdown_opened:
-        log.info("  Using keyboard shortcut to open dropdown: Alt+Down")
-        ag.hotkey("alt", "down")
+        log.info("  Tentando abrir dropdown com SPACE...")
+        ag.press("space")
         time.sleep(0.8)
         dropdown_opened = True
     
-    ag.screenshot(str(debug_dir / "04b_dropdown_opened.png"))
+    ag.screenshot(str(debug_dir / "04c_dropdown_opened.png"))
     
     # Now search for "FBX binary" option in the opened dropdown
-    log.info("  Searching for 'FBX binary' option in dropdown...")
-    time.sleep(0.5)  # Wait for dropdown animation
+    log.info("  Procurando opção 'FBX binary' no dropdown aberto...")
+    time.sleep(0.6)  # Wait for dropdown animation
     
-    # Try multiple search terms
-    fbx_options = ["FBX binary", "FBX Binary", "FBX(*.fbx)"]
+    # Try multiple search terms for FBX binary
+    fbx_search_terms = [
+        "FBX binary",      # Exact match
+        "FBX Binary",      # Case variation
+        "binary",          # Just "binary"
+        "FBX",             # Just "FBX"
+    ]
+    
     fbx_found = False
     
-    for option_text in fbx_options:
+    for option_text in fbx_search_terms:
+        log.info(f"  Buscando '{option_text}'...")
         result = find_text_on_screen(option_text, region=window_region, 
-                                     confidence_threshold=0.5,
-                                     debug_save=debug_dir / f"05_search_{option_text.replace(' ', '_').replace('*', 'x')}.png")
+                                     confidence_threshold=0.3,  # Even lower threshold
+                                     case_sensitive=False,      # Ignore case
+                                     debug_save=debug_dir / f"05_search_{option_text.replace(' ', '_')}.png")
         if result:
             x, y, w, h = result
             click_x = x + w // 2
             click_y = y + h // 2
-            log.info(f"  ✓ Found '{option_text}' at ({click_x}, {click_y})")
+            log.info(f"  ✓ Encontrado '{option_text}' em ({x}, {y}), clicando em ({click_x}, {click_y})")
             ag.click(click_x, click_y)
-            time.sleep(0.5)
+            time.sleep(0.6)
+            ag.screenshot(str(debug_dir / "05_fbx_binary_clicked.png"))
             fbx_found = True
             break
         time.sleep(0.2)
     
-    # Fallback: Navigate with arrow keys
+    # Fallback: Navigate with keyboard
     if not fbx_found:
-        log.warning("  FBX binary not found by OCR, using keyboard navigation...")
-        log.info("  Pressing DOWN arrow keys to find FBX binary...")
+        log.warning("  'FBX binary' não encontrado por OCR, usando navegação por teclado...")
         
-        # First, go to top of list
-        ag.press("home")
-        time.sleep(0.3)
+        # Strategy 1: Type 'f' to jump to FBX options (many dropdowns support this)
+        log.info("  Tentando tecla 'f' para ir direto a opções FBX...")
+        ag.press("f")
+        time.sleep(0.4)
+        ag.screenshot(str(debug_dir / "05a_pressed_f.png"))
         
-        # FBX binary is typically near the top of the list
-        # Try up to 15 down presses
-        for i in range(15):
-            ag.screenshot(str(debug_dir / f"05_dropdown_item_{i}.png"))
-            
-            # Check if "FBX" appears in current selection
-            fbx_check = find_text_on_screen("FBX", region=window_region, confidence_threshold=0.5)
-            binary_check = find_text_on_screen("binary", region=window_region, confidence_threshold=0.5)
-            
-            if fbx_check or binary_check:
-                log.info(f"  ✓ Found FBX after {i} down presses")
-                ag.press("enter")
-                time.sleep(0.5)
-                fbx_found = True
-                break
-            
-            ag.press("down")
+        # Check if FBX appeared
+        fbx_check = find_text_on_screen("FBX", region=window_region, confidence_threshold=0.4)
+        if fbx_check:
+            log.info("  ✓ Tecla 'f' funcionou, procurando 'binary'...")
+            # Now look for "binary" and press down until we find it
+            for i in range(5):  # FBX binary should be within 5 items from first FBX
+                binary_check = find_text_on_screen("binary", region=window_region, 
+                                                   confidence_threshold=0.3, case_sensitive=False)
+                if binary_check:
+                    log.info(f"  ✓ Encontrado 'binary' após {i} pressionadas de DOWN")
+                    ag.press("enter")
+                    time.sleep(0.5)
+                    fbx_found = True
+                    break
+                ag.press("down")
+                time.sleep(0.3)
+                ag.screenshot(str(debug_dir / f"05b_down_{i}.png"))
+        
+        # Strategy 2: Manual navigation from top
+        if not fbx_found:
+            log.info("  Tentando navegação manual desde o topo...")
+            ag.press("home")
             time.sleep(0.3)
+            
+            # Try up to 10 down presses
+            for i in range(10):
+                ag.screenshot(str(debug_dir / f"05c_dropdown_item_{i}.png"))
+                
+                # Check if "FBX" and "binary" appear in current selection
+                fbx_check = find_text_on_screen("FBX", region=window_region, 
+                                               confidence_threshold=0.4, case_sensitive=False)
+                binary_check = find_text_on_screen("binary", region=window_region, 
+                                                   confidence_threshold=0.3, case_sensitive=False)
+                
+                if fbx_check and binary_check:
+                    log.info(f"  ✓ Encontrado FBX binary após {i} pressionadas de DOWN")
+                    ag.press("enter")
+                    time.sleep(0.5)
+                    fbx_found = True
+                    break
+                elif fbx_check:
+                    log.info(f"  Encontrado FBX (mas não binary) no item {i}, continuando...")
+                
+                ag.press("down")
+                time.sleep(0.3)
         
         # Last resort: just press Enter on whatever is selected
         if not fbx_found:
-            log.warning("  Could not find FBX binary, pressing Enter on current selection")
+            log.warning("  Não foi possível encontrar FBX binary, usando seleção atual")
             ag.press("enter")
             time.sleep(0.5)
     
@@ -455,9 +512,11 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
     except Exception:
         pass
     
-    # Create debug directory
-    debug_dir = fbx_path.parent / "_ocr_debug"
+    # Create debug directory at project root
+    project_root = Path.cwd()
+    debug_dir = project_root / "_ocr_debug"
     debug_dir.mkdir(exist_ok=True)
+    log.info(f"Debug screenshots will be saved to: {debug_dir}")
     
     # Wait for interface to load
     log.info("Waiting for interface to load...")
@@ -466,51 +525,51 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
     
     # Handle Auto Update dialog if it appears
     window_region = (wl, wt, ww, wh)
-    handle_auto_update_dialog(window_region=window_region, debug_dir=debug_dir)
+    # handle_auto_update_dialog(window_region=window_region, debug_dir=debug_dir)
     
     # ── Pre-Step: Verificar se há diálogo de Update antes de continuar ────────
-    log.info("Pre-Step: Verificando se há diálogo de Update na tela...")
+    # log.info("Pre-Step: Verificando se há diálogo de Update na tela...")
     
-    # Procurar por "Update" e "Cancel" simultaneamente
-    update_found = find_text_on_screen("Update", region=window_region, 
-                                      confidence_threshold=0.4,
-                                      debug_save=debug_dir / "00a_check_update.png")
-    cancel_found = find_text_on_screen("Cancel", region=window_region, 
-                                      confidence_threshold=0.4,
-                                      debug_save=debug_dir / "00a_check_cancel.png")
+    # # Procurar por "Update" e "Cancel" simultaneamente
+    # update_found = find_text_on_screen("Update", region=window_region, 
+    #                                   confidence_threshold=0.4,
+    #                                   debug_save=debug_dir / "00a_check_update.png")
+    # cancel_found = find_text_on_screen("Cancel", region=window_region, 
+    #                                   confidence_threshold=0.4,
+    #                                   debug_save=debug_dir / "00a_check_cancel.png")
     
-    if update_found and cancel_found:
-        log.info("  ✓ Diálogo de Update detectado (Update + Cancel presentes)")
-        log.info("  Clicando em Cancel para fechar o diálogo...")
+    # if update_found and cancel_found:
+    #     log.info("  ✓ Diálogo de Update detectado (Update + Cancel presentes)")
+    #     log.info("  Clicando em Cancel para fechar o diálogo...")
         
-        # Clicar no botão Cancel
-        cx, cy, cw, ch = cancel_found
-        click_x = cx + cw // 2
-        click_y = cy + ch // 2
-        ag.click(click_x, click_y)
-        time.sleep(2)  # Esperar o diálogo fechar
-        ag.screenshot(str(debug_dir / "00a_update_dialog_closed.png"))
+    #     # Clicar no botão Cancel
+    #     cx, cy, cw, ch = cancel_found
+    #     click_x = cx + cw // 2
+    #     click_y = cy + ch // 2
+    #     ag.click(click_x, click_y)
+    #     time.sleep(2)  # Esperar o diálogo fechar
+    #     ag.screenshot(str(debug_dir / "00a_update_dialog_closed.png"))
         
-        # Verificar se o menu Edit agora está visível
-        log.info("  Verificando se menu Edit está visível...")
-        menu_bar_region = (wl, wt, ww, int(wh * 0.08))
+    #     # Verificar se o menu Edit agora está visível
+    #     log.info("  Verificando se menu Edit está visível...")
+    #     menu_bar_region = (wl, wt, ww, int(wh * 0.08))
         
-        edit_visible = False
-        for edit_label in ["Edit"]:
-            edit_check = find_text_on_screen(edit_label, region=menu_bar_region, 
-                                            confidence_threshold=0.6,
-                                            debug_save=debug_dir / f"00a_check_edit_{edit_label}.png")
-            if edit_check:
-                log.info(f"  ✓ Menu '{edit_label}' está visível após fechar diálogo!")
-                edit_visible = True
-                break
+    #     edit_visible = False
+    #     for edit_label in ["Edit"]:
+    #         edit_check = find_text_on_screen(edit_label, region=menu_bar_region, 
+    #                                         confidence_threshold=0.6,
+    #                                         debug_save=debug_dir / f"00a_check_edit_{edit_label}.png")
+    #         if edit_check:
+    #             log.info(f"  ✓ Menu '{edit_label}' está visível após fechar diálogo!")
+    #             edit_visible = True
+    #             break
         
-        if edit_visible:
-            log.info("  Interface pronta para uso. Continuando com o workflow...")
-        else:
-            log.warning("  Menu Edit não encontrado após fechar diálogo, mas continuando...")
-    else:
-        log.info("  Nenhum diálogo de Update detectado. Continuando normalmente...")
+    #     if edit_visible:
+    #         log.info("  Interface pronta para uso. Continuando com o workflow...")
+    #     else:
+    #         log.warning("  Menu Edit não encontrado após fechar diálogo, mas continuando...")
+    # else:
+    #     log.info("  Nenhum diálogo de Update detectado. Continuando normalmente...")
     
     # ── Step 1: Click Edit menu using OCR ─────────────────────────────────────
     log.info("Step 1: Clicking Edit menu using OCR...")
@@ -534,16 +593,8 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
             break
     
     if not edit_clicked:
-        log.warning("  Could not find Edit menu by OCR, using fallback coordinates")
-        menu_y = wt + int(wh * 0.047)
-        btn_edit_menu_x = wl + int(ww * 0.10)
-        ag.click(btn_edit_menu_x, menu_y)
-        time.sleep(CFG["ui_delay"] * 2)
-        ag.screenshot(str(debug_dir / "01_edit_menu_clicked_fallback.png"))
-        edit_clicked = True  # Assume fallback worked
-    
-    if not edit_clicked:
-        log.error("✗ Step 1 FAILED: Could not click Edit menu")
+        log.error("✗ Step 1 FAILED: Could not find Edit menu")
+        log.error("   Script will stop. Please ensure mHandStudio window is open and visible.")
         return False
     
     # ── Step 2: Click + button using OCR ───────────────────────────────────────
@@ -681,49 +732,50 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
     time.sleep(0.5)
     ag.screenshot(str(debug_dir / "04b_cursor_moved_right.png"))
 
-    # ── Step 5: Find export icon (5% above the + button, far right) ───────────
-    log.info("Step 5: Searching for export icon (5% above + button) using OpenCV...")
+    # ── Step 5: Find export icon (lower right, near + button) ───────────
+    log.info("Step 5: Procurando ícone de export na região inferior direita...")
     
     export_pos = None
     export_success = False
     
-    # The export icon is at the FAR RIGHT, approximately 5% ABOVE the + button
-    # Use the + button position as reference
+    # Extract plus_position coordinates
     if plus_position:
         plus_x, plus_y = plus_position
-        # Calculate search region: 5% above the + button, far right side
-        search_y_offset = int(wh * 0.05)  # 5% of window height
-        region_width = int(ww * 0.15)     # Rightmost 15%
-        region_height = int(wh * 0.15)    # 15% height around the target
-        
-        lower_right_region = (
-            wl + ww - region_width,           # Start from right edge
-            plus_y - search_y_offset - region_height // 2,  # Center around 5% above +
-            region_width,
-            region_height
-        )
-        
-        log.info(f"  + button at Y={plus_y}, searching 5% above (Y≈{plus_y - search_y_offset})")
-        log.info(f"  Search region: x={lower_right_region[0]}, y={lower_right_region[1]}, w={region_width}, h={region_height}")
     else:
-        # Fallback if + position not available
-        region_width = int(ww * 0.15)
-        region_height = int(wh * 0.30)
-        lower_right_region = (
-            wl + ww - region_width,
-            wt + wh - region_height - int(wh * 0.10),
-            region_width,
-            region_height
-        )
-        log.warning("  + button position not available, using estimated region")
-        log.info(f"  Search region: x={lower_right_region[0]}, y={lower_right_region[1]}, w={region_width}, h={region_height}")
+        # Should not happen, but provide fallback
+        plus_x = wl + int(ww * 0.065)
+        plus_y = wt + wh - int(wh * 0.052)
     
-    # Try OpenCV detection above the playback controls
+    # O ícone de export fica próximo ao botão +, um pouco acima
+    # Buscar na região inferior direita baseada na posição do +
+    log.info("  Buscando na região inferior direita (perto do botão +)...")
+    
+    # Definir região de busca: área inferior direita, 5% acima do botão +
+    search_y_offset = int(wh * 0.05)  # 5% of window height
+    region_width = int(ww * 0.10)     # 10% da largura
+    region_height = int(wh * 0.10)    # 10% da altura
+    
+    lower_right_region = (
+        wl + ww - region_width,           # Lado direito
+        plus_y - search_y_offset - region_height // 2,  # 5% acima do +
+        region_width,
+        region_height
+    )
+    
+    log.info(f"  Região de busca (inferior direita):")
+    log.info(f"    X: {lower_right_region[0]} (rightmost {region_width}px)")
+    log.info(f"    Y: {lower_right_region[1]} (5% above + button at Y={plus_y})")
+    log.info(f"    Width: {region_width}px, Height: {region_height}px")
+    
+    # Salvar screenshot da região antes de processar
+    ag.screenshot(str(debug_dir / "05_search_region_preview.png"))
+    
+    # Try OpenCV detection in the lower-right area
     if OPENCV_AVAILABLE:
         try:
             import cv2
             
-            # Capture the lower-right area (above playback controls)
+            # Capture the lower-right area
             screenshot = ag.screenshot(region=lower_right_region)
             img = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -747,47 +799,79 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
                     icon_candidates.append((x, y, w, h, area))
             
             if icon_candidates:
-                # Sort by X position (rightmost first - export is at far right)
+                # Sort by position: RIGHTMOST first (high X)
                 icon_candidates.sort(key=lambda ic: ic[0], reverse=True)
                 
-                log.info(f"  ✓ OpenCV found {len(icon_candidates)} icons in search region")
+                log.info(f"  ✓ OpenCV encontrou {len(icon_candidates)} ícones na região inferior direita")
+                log.info(f"  Ordenação: mais à direita primeiro")
                 
                 # Draw rectangles on debug image
-                for ix, iy, iw, ih, _ in icon_candidates:
-                    cv2.rectangle(img, (ix, iy), (ix + iw, iy + ih), (0, 255, 0), 2)
+                for idx, (ix, iy, iw, ih, _) in enumerate(icon_candidates):
+                    color = (0, 0, 255) if idx == 0 else (0, 255, 0)  # First icon in red, others in green
+                    cv2.rectangle(img, (ix, iy), (ix + iw, iy + ih), color, 2)
+                    # Add number label
+                    cv2.putText(img, str(idx + 1), (ix, iy - 5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 cv2.imwrite(str(debug_dir / "05_lower_right_icons_detected.png"), img)
                 
                 # Try each icon until we find one that opens the DataExport dialog
+                # Start with the rightmost icon
                 for idx, (x, y, w, h, area) in enumerate(icon_candidates):
                     # Convert back to screen coordinates
                     test_x = lower_right_region[0] + x + w // 2
                     test_y = lower_right_region[1] + y + h // 2
                     
-                    log.info(f"  Trying icon {idx + 1}/{len(icon_candidates)} at ({test_x}, {test_y})...")
+                    log.info(f"  Tentando ícone {idx + 1}/{len(icon_candidates)} em ({test_x}, {test_y})...")
+                    log.info(f"    Posição relativa: X={x} (mais à direita = maior)")
                     ag.click(test_x, test_y)
-                    time.sleep(1.5)  # Wait for dialog to appear
                     
-                    # Take screenshot and check for "DataExport" text
-                    ag.screenshot(str(debug_dir / f"05_icon_{idx + 1}_clicked.png"))
+                    # Wait for dialog to appear and take screenshots
+                    time.sleep(1.0)
+                    screenshot_1s = debug_dir / f"05_icon_{idx + 1}_clicked_1s.png"
+                    ag.screenshot(str(screenshot_1s))
+                    log.info(f"  Screenshot salvo: {screenshot_1s.name}")
                     
-                    # Check if DataExport dialog appeared
+                    time.sleep(1.0)
+                    screenshot_2s = debug_dir / f"05_icon_{idx + 1}_clicked_2s.png"
+                    ag.screenshot(str(screenshot_2s))
+                    log.info(f"  Screenshot salvo: {screenshot_2s.name}")
+                    
+                    # Extra delay to ensure dialog is fully rendered
+                    log.info(f"  Aguardando renderização completa do diálogo (mais 2.5s)...")
+                    time.sleep(2.5)
+                    
+                    # Take final screenshot immediately before OCR
+                    screenshot_final = debug_dir / f"05_icon_{idx + 1}_before_ocr.png"
+                    ag.screenshot(str(screenshot_final))
+                    log.info(f"  Screenshot final antes do OCR salvo: {screenshot_final.name}")
+                    
+                    # Check if DataExport dialog appeared (look for dialog title)
                     window_region = (wl, wt, ww, wh)
-                    dataexport_found = find_text_on_screen("DataExport", region=window_region, 
-                                                          confidence_threshold=0.7)
+                    dataexport_found = False
+                    
+                    # Try to find dialog title (DataExport is the window title)
+                    # Don't search for "Export As" here - that's the dropdown label inside the dialog
+                    for dialog_text in ["DataExport", "Data Export", "Export Folder", "File Name"]:
+                        result = find_text_on_screen(dialog_text, region=window_region, 
+                                                     confidence_threshold=0.5,
+                                                     debug_save=debug_dir / f"05_icon_{idx + 1}_search_{dialog_text.replace(' ', '_')}.png")
+                        if result:
+                            log.info(f"  ✓ Export dialog encontrado (texto '{dialog_text}') após clicar no ícone {idx + 1}!")
+                            dataexport_found = True
+                            break
                     
                     if dataexport_found:
-                        log.info(f"  ✓ Found DataExport dialog after clicking icon {idx + 1}!")
                         export_pos = (test_x, test_y)
                         export_success = True
                         break
                     else:
-                        log.info(f"  DataExport not found, trying next icon...")
+                        log.info(f"  Export dialog não encontrado, tentando próximo ícone...")
                         # Press Escape to close any dialog that might have opened
                         ag.press("escape")
                         time.sleep(0.5)
                 
                 if not export_success:
-                    log.warning("  None of the detected icons opened DataExport dialog")
+                    log.warning("  Nenhum dos ícones detectados abriu o diálogo Export")
             else:
                 log.warning("  No icon candidates found in lower-right area by OpenCV")
         except Exception as e:
@@ -813,18 +897,44 @@ def export_fbx_via_ui_ocr(md_path: Path, fbx_path: Path) -> bool:
         log.info(f"  Window: from ({wl}, {wt}) to ({wl + ww}, {wt + wh})")
         
         ag.click(export_btn_x, export_btn_y)
-        time.sleep(1.5)
-        ag.screenshot(str(debug_dir / "05_export_clicked_fallback.png"))
         
-        # Check if DataExport appeared
+        # Wait for dialog and take screenshots
+        time.sleep(1.0)
+        screenshot_1s = debug_dir / "05_export_clicked_fallback_1s.png"
+        ag.screenshot(str(screenshot_1s))
+        log.info(f"  Screenshot salvo: {screenshot_1s.name}")
+        
+        time.sleep(1.0)
+        screenshot_2s = debug_dir / "05_export_clicked_fallback_2s.png"
+        ag.screenshot(str(screenshot_2s))
+        log.info(f"  Screenshot salvo: {screenshot_2s.name}")
+        
+        # Extra delay to ensure dialog is fully rendered
+        log.info(f"  Aguardando renderização completa do diálogo (mais 2.5s)...")
+        time.sleep(2.5)
+        
+        # Take final screenshot immediately before OCR
+        screenshot_final = debug_dir / "05_export_clicked_fallback_before_ocr.png"
+        ag.screenshot(str(screenshot_final))
+        log.info(f"  Screenshot final antes do OCR salvo: {screenshot_final.name}")
+        
+        # Check if Export dialog appeared (look for dialog title or labels)
         window_region = (wl, wt, ww, wh)
-        dataexport_found = find_text_on_screen("DataExport", region=window_region, 
-                                              confidence_threshold=0.7)
-        if dataexport_found:
-            log.info("  ✓ Fallback position opened DataExport dialog!")
-            export_success = True
-        else:
-            log.warning("  Fallback position did not open DataExport dialog")
+        dataexport_found = False
+        
+        # Try to find dialog title or field labels
+        for dialog_text in ["DataExport", "Data Export", "Export Folder", "File Name"]:
+            result = find_text_on_screen(dialog_text, region=window_region, 
+                                         confidence_threshold=0.5,
+                                         debug_save=debug_dir / f"05_fallback_search_{dialog_text.replace(' ', '_')}.png")
+            if result:
+                log.info(f"  ✓ Fallback position opened Export dialog (texto '{dialog_text}')!")
+                dataexport_found = True
+                export_success = True
+                break
+        
+        if not dataexport_found:
+            log.warning("  Fallback position did not open Export dialog")
     
     if not export_success:
         log.error("✗ Step 5 FAILED: Could not click export button")
@@ -859,16 +969,13 @@ def main():
     parser = argparse.ArgumentParser(description="Convert mHand .md files to FBX using OCR")
     parser.add_argument("--input", "-i", required=True, help="Input .md file")
     parser.add_argument("--output", "-o", help="Output .fbx file (optional)")
-    parser.add_argument("--no-ocr", action="store_true", help="Disable OCR, use legacy method")
     args = parser.parse_args()
     
-    # Check dependencies
-    if not args.no_ocr:
-        if not check_tesseract_installation():
-            log.error("Tesseract OCR not installed!")
-            log.error("Download from: https://github.com/UB-Mannheim/tesseract/wiki")
-            log.error("Or run with --no-ocr to use legacy coordinate-based method")
-            sys.exit(1)
+    # Check Tesseract installation
+    if not check_tesseract_installation():
+        log.error("Tesseract OCR not installed!")
+        log.error("Download from: https://github.com/UB-Mannheim/tesseract/wiki")
+        sys.exit(1)
     
     md_path = Path(args.input)
     if not md_path.exists():
@@ -884,20 +991,13 @@ def main():
         fbx_path = output_dir / f"{md_path.stem}.fbx"
     
     log.info("=" * 70)
-    log.info("mHand → FBX Converter (OCR-Enhanced)")
+    log.info("mHand → FBX Converter (OCR)")
     log.info("=" * 70)
     log.info("Input:  %s", md_path)
     log.info("Output: %s", fbx_path)
-    log.info("OCR:    %s", "Enabled" if not args.no_ocr else "Disabled")
     log.info("=" * 70)
     
-    if args.no_ocr:
-        log.warning("OCR disabled - using legacy method")
-        # Import and use original method
-        from mhand_to_fbx import export_fbx_via_ui
-        success = export_fbx_via_ui(md_path, fbx_path)
-    else:
-        success = export_fbx_via_ui_ocr(md_path, fbx_path)
+    success = export_fbx_via_ui_ocr(md_path, fbx_path)
     
     if success:
         log.info("✓ Conversion completed successfully")
