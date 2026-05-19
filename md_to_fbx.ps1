@@ -1,10 +1,8 @@
 ﻿param(
-    [string]$RootPath = "mao",
-    [switch]$UseLegacy = $false
+    [string]$RootPath = "mao"
 )
 
-# Use OCR version by default (more reliable)
-$scriptName = if ($UseLegacy) { "mhand_to_fbx.py" } else { "mhand_to_fbx_ocr.py" }
+$scriptName = "mhand_to_fbx_ocr.py"
 
 Write-Host "================================================" -ForegroundColor Yellow
 Write-Host "  mHand MD to FBX Batch Converter" -ForegroundColor Yellow

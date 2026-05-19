@@ -197,7 +197,7 @@ python mhand_to_fbx_ocr.py --input "mao\01-05\Abastar.md" --output "fbx\Abastar.
 
 ### Processamento em Lote
 
-Use o script PowerShell `md_to_fbx.ps1` para processar múltiplos arquivos:
+Use o script PowerShell `md_to_fbx.ps1` para processar múltiplos arquivos automaticamente com OCR:
 
 #### Uso Básico
 
@@ -208,13 +208,10 @@ Use o script PowerShell `md_to_fbx.ps1` para processar múltiplos arquivos:
 # Especificar pasta raiz customizada
 .\md_to_fbx.ps1 -RootPath "C:\caminho\para\arquivos"
 
-# Usar versão OCR (mais confiável)
-.\md_to_fbx.ps1 -UseOCR
-
-# Combinar parâmetros
-.\md_to_fbx.ps1 -RootPath "mao\01-05" -UseOCR
-
 # Processar apenas uma subpasta específica
+.\md_to_fbx.ps1 -RootPath "mao\01-05"
+
+# Processar outra subpasta
 .\md_to_fbx.ps1 -RootPath "mao\10-04"
 ```
 
@@ -223,11 +220,10 @@ Use o script PowerShell `md_to_fbx.ps1` para processar múltiplos arquivos:
 | Parâmetro | Tipo | Padrão | Descrição |
 |-----------|------|--------|-----------|
 | `-RootPath` | String | `"mao"` | Diretório raiz onde buscar arquivos `.md` recursivamente |
-| `-UseOCR` | Switch | `$false` | Usar `mhand_to_fbx_ocr.py` (OCR) ao invés de `mhand_to_fbx.py` |
 
 #### Saída do Script
 
-O script mostra um relatório completo:
+O script mostra um relatório completo do processamento:
 
 ```
 ================================================
@@ -240,18 +236,18 @@ Found 15 .md file(s)
 
 Processing: Abastar.md
   Path: C:\...\mao\01-05\Abastar.md
-  ✓ Success
+  Success
 
 Processing: Acordar.md
   Path: C:\...\mao\10-04\Acordar.md
-  ✓ Success
+  Success
 
 ================================================
   Batch Conversion Complete
 ================================================
 Total: 15 | Success: 15 | Failed: 0
 
-All conversions completed successfully! ✓
+All conversions completed successfully!
 ```
 
 ---
