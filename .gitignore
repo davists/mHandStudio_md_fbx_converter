@@ -3,3 +3,5 @@ __pycache__
 MocapExtra/ 
 MotionFiles/
 mao/*/_ocr_debug/*
+_ocr_debug/
+_startup_debug/
